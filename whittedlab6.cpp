@@ -27,7 +27,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //[/ignore]
 
-
+#include <cstring>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -46,6 +47,7 @@ public:
     Vec3f(float xx) : x(xx), y(xx), z(xx) {}
     Vec3f(float xx, float yy, float zz) : x(xx), y(yy), z(zz) {}
     Vec3f operator * (const float &r) const { return Vec3f(x * r, y * r, z * r); }
+    Vec3f operator / (const float &q) const { return Vec3f(x / q, y / q, z / q); }
     Vec3f operator * (const Vec3f &v) const { return Vec3f(x * v.x, y * v.y, z * v.z); }
     Vec3f operator - (const Vec3f &v) const { return Vec3f(x - v.x, y - v.y, z - v.z); }
     Vec3f operator + (const Vec3f &v) const { return Vec3f(x + v.x, y + v.y, z + v.z); }
@@ -53,6 +55,10 @@ public:
     Vec3f& operator += (const Vec3f &v) { x += v.x, y += v.y, z += v.z; return *this; }
     friend Vec3f operator * (const float &r, const Vec3f &v)
     { return Vec3f(v.x * r, v.y * r, v.z * r); }
+    friend Vec3f operator / (const float &r, const Vec3f &v)
+    { return Vec3f(r/v.x, r/v.y, r/v.z); }
+    friend Vec3f operator / (Vec3f &o, Vec3f &v)
+    { return Vec3f(o.x/v.x, o.y/v.y, o.z/v.z); }
     friend std::ostream & operator << (std::ostream &os, const Vec3f &v)
     { return os << v.x << ", " << v.y << ", " << v.z; }
     float x, y, z;
@@ -104,6 +110,7 @@ float deg2rad(const float &deg)
 inline
 Vec3f mix(const Vec3f &a, const Vec3f& b, const float &mixValue)
 { return a * (1 - mixValue) + b * mixValue; }
+
 
 struct Options
 {
@@ -184,6 +191,174 @@ public:
 
     Vec3f center;
     float radius, radius2;
+};
+
+class Box : public Object {
+public:
+    /*Box constructor. Box has a center, side length, and three orthonormal axes. Also store the min and max of the untransformed AABB.*/
+    Box(const Vec3f &c, const float &l, const Vec3f &xaxis, const Vec3f &yaxis, const Vec3f &zaxis) : 
+    min(c - Vec3f(0.5*l, 0.5*l, 0.5*l)), max(c + Vec3f(0.5*l, 0.5*l, 0.5*l)),
+         center(c), length(l), xnorm(xaxis), ynorm(yaxis), znorm(zaxis) {}
+
+    /*Ray-box intersection. Calculate the intersection with the box using untransformed AABBox bounds.*/
+    bool intersect(const Vec3f &orig, const Vec3f &dir, float &tnear, uint32_t &index, Vec2f &uv) const
+    {
+        float tMin = 0.0f;
+        float tMax = 100000.0f;
+
+        Vec3f delta = center - orig;
+        
+        float e = dotProduct(xnorm, delta);
+        float f = dotProduct(dir, xnorm);
+
+        if (fabs(f) > 0.001f) {
+            float t1 = (e + min.x)/f;
+            float t2 = (e + max.x)/f;
+
+            if (t1 > t2) {
+                std::swap(t1, t2);
+            }
+            if (t2 < tMax) {
+                tMax = t2;
+            }
+            if (t1 > tMin) {
+                tMin = t1;
+            }
+            if (tMax < tMin) {
+                return false;
+            }
+        } else {
+            if (-e + min.x > 0.0f || -e + max.x < 0.0f) {
+                return false;
+            }
+        }
+
+        e = dotProduct(ynorm, delta);
+        f = dotProduct(dir, ynorm);
+
+        if (fabs(f) > 0.001f) {
+            float t1 = (e + min.y)/f;
+            float t2 = (e + max.y)/f;
+
+            if (t1 > t2) {
+                std::swap(t1, t2);
+            }
+
+            if (t2 < tMax) {
+                tMax = t2;
+            }
+
+            if (t1 > tMin) {
+                tMin = t1;
+            }
+            if (tMax < tMin) {
+                return false;
+            }
+        } else {
+            if (-e + min.y > 0.0f || -e + max.y < 0.0f) {
+                return false;
+            }
+        }
+
+        e = dotProduct(znorm, delta);
+        f = dotProduct(dir, znorm);
+
+        if (fabs(f) > 0.001f) {
+            float t1 = (e + min.z)/f;
+            float t2 = (e + max.z)/f;
+
+            if (t1 > t2) {
+                std::swap(t1, t2);
+            }
+
+            if (t2 < tMax) {
+                tMax = t2;
+            }
+
+            if (t1 > tMin) {
+                tMin = t1;
+            }
+            if (tMax < tMin) {
+                return false;
+            }
+        } else {
+            if (-e + min.z > 0.0f || -e + max.z < 0.0f) {
+                return false;
+            }
+        }
+
+        tnear = tMin;
+        return true;
+
+    }
+
+    /*Get surface normals of the cube. I don't know why this works, but it does. I could not figure out the appropriate way
+    to calculate surface normals for cases where the box is rotated.*/
+    void getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const {
+    
+        Vec3f v = P - center;
+        float x = abs(dotProduct(P, xnorm));
+        float y = abs(dotProduct(P, ynorm));
+        float z = abs(dotProduct(P, znorm));
+
+        float m = std::max(x, y);
+        m = std::max(m, z);
+
+        Vec3f d;
+        if (m == z) {
+            if (P.z > center.z) {
+                N = -1 *znorm;
+            } else if (P.z < center.z) {
+                N = znorm;
+            }
+        }
+    }
+
+    Vec3f min, max, center, xnorm, ynorm, znorm;
+    float length;
+
+};
+
+class Cylinder : public Object {
+    public:
+
+    /*Cylinder constructor. Cylinder has a center, radius, and height. All cylinders are upright cylinders.*/
+    Cylinder(const Vec3f &c, const float &r, const float &h) : center(c), radius(r), height(h) {}
+
+    bool intersect(const Vec3f &orig, const Vec3f &dir, float &tnear, uint32_t &index, Vec2f &uv) const
+    {
+
+        
+        float a = (dir.x * dir.x) + (dir.z * dir.z);
+        float b = 2*(dir.x*(orig.x - center.x) + dir.z*(orig.z - center.z));
+        float c = (orig.x - center.x) * (orig.x - center.x) + (orig.z - center.z) * (orig.z - center.z) - (radius * radius);
+
+        float delta = b*b - 4*(a * c);
+        if (fabs(delta) < 0.001) return false;
+
+        if (delta < 0.0) return false;
+
+        float t1 = (-b - sqrt(delta))/2*a;
+        float t2 = (-b + sqrt(delta)/2*a);
+
+        if (t1 > t2) tnear = t2;
+        else tnear = t1;
+
+        float r = orig.y + tnear*dir.y;
+
+        if ((r >= center.y) && (r <= center.y + height)) return true;
+        else return false; 
+    }
+
+    /*Get the normal for the cylinder. Similar to the sphere.*/
+    void getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const {
+        N = Vec3f(P.x-center.x, 0, P.z-center.z);
+        N = normalize(N);
+
+    }
+
+    Vec3f center;
+    float radius, height;
 };
 
 bool rayTriangleIntersect(
@@ -347,6 +522,8 @@ void fresnel(const Vec3f &I, const Vec3f &N, const float &ior, float &kr)
     // As a consequence of the conservation of energy, transmittance is given by:
     // kt = 1 - kr;
 }
+
+
 
 // [comment]
 // Returns true if the ray intersects an object, false otherwise.
@@ -546,15 +723,20 @@ int main(int argc, char **argv)
     std::vector<std::unique_ptr<Object>> objects;
     std::vector<std::unique_ptr<Light>> lights;
     
-    Sphere *sph1 = new Sphere(Vec3f(-1, 0, -12), 2);
-    sph1->materialType = DIFFUSE_AND_GLOSSY;
-    sph1->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    Sphere *sph2 = new Sphere(Vec3f(0.5, -0.5, -8), 1.5);
-    sph2->ior = 1.5;
-    sph2->materialType = REFLECTION_AND_REFRACTION;
     
-    objects.push_back(std::unique_ptr<Sphere>(sph1));
-    objects.push_back(std::unique_ptr<Sphere>(sph2));
+    
+
+    Box *box1 = new Box(Vec3f(0, -1, -3), 2, Vec3f(0.707, 0, -0.707), Vec3f(0,1,0), Vec3f(0.707,0,0.707));
+    box1->materialType = DIFFUSE_AND_GLOSSY;
+    box1->diffuseColor = Vec3f(1,1,0);
+
+    Cylinder *cyl1 = new Cylinder(Vec3f(2,-1,-6), 1, 1);
+    cyl1->materialType = DIFFUSE_AND_GLOSSY;
+    cyl1->diffuseColor = Vec3f(1,0,0);
+    
+    objects.push_back(std::unique_ptr<Cylinder>(cyl1));
+
+    objects.push_back(std::unique_ptr<Box>(box1));
 
     Vec3f verts[4] = {{-5,-3,-6}, {5,-3,-6}, {5,-3,-16}, {-5,-3,-16}};
     uint32_t vertIndex[6] = {0, 1, 3, 1, 2, 3};
@@ -573,8 +755,8 @@ int main(int argc, char **argv)
     options.height = 480;
     options.fov = 90;
     options.backgroundColor = Vec3f(0.235294, 0.67451, 0.843137);
-    options.maxDepth = 5;
-    options.bias = 0.00001;
+    options.maxDepth = 10;
+    options.bias = 20;
     
     // finally, render
     render(options, objects, lights);
